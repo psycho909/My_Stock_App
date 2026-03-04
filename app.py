@@ -1,148 +1,93 @@
 import streamlit as st
-import streamlit.components.v1 as components
-import requests
+import sqlite3
 import pandas as pd
 
 # ==========================================
-# 1. 頁面基本設定 (Python)
+# 1. 資料庫初始化設定 (如果沒有檔案，會自動建立)
 # ==========================================
-st.set_page_config(page_title="台股 EPS 查詢系統", page_icon="📈", layout="centered")
+def init_db():
+    # 連線到資料庫 (檔案會自動命名為 watchlist.db，存在同一資料夾)
+    conn = sqlite3.connect('watchlist.db')
+    cursor = conn.cursor()
+    # 建立資料表 (如果不存在的話)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS stocks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            stock_id TEXT NOT NULL,
+            stock_name TEXT NOT NULL,
+            note TEXT,
+            create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+# 每次網頁載入時，確保資料庫已經準備好
+init_db()
 
 # ==========================================
-# 2. 注入自訂 CSS (您的前端主戰場 1)
-# 這裡可以使用 CSS 徹底改變 Streamlit 的預設外觀
+# 2. 定義對資料庫的「寫入」與「讀取」功能
 # ==========================================
-st.markdown("""
-    <style>
-    /* 隱藏 Streamlit 官方的右上角選單與底部浮水印 */
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    header {visibility: hidden;}
-    
-    /* 自訂主標題樣式 */
-    .custom-title {
-        color: #2c3e50;
-        text-align: center;
-        font-family: 'Arial', sans-serif;
-        border-bottom: 3px solid #3498db;
-        padding-bottom: 10px;
-        margin-bottom: 25px;
-    }
-    
-    /* 自訂所有按鈕的樣式 (覆蓋預設) */
-    .stButton>button {
-        background-color: #3498db !important;
-        color: white !important;
-        border-radius: 8px !important;
-        border: none !important;
-        font-weight: bold !important;
-        transition: 0.3s !important;
-    }
-    .stButton>button:hover {
-        background-color: #2980b9 !important;
-        transform: scale(1.02) !important;
-    }
-    </style>
-    
-    <h1 class="custom-title">📈 台股 EPS 季報與年度加總查詢</h1>
-""", unsafe_allow_html=True)
+def add_record(stock_id, stock_name, note):
+    """將新資料寫入 SQLite"""
+    conn = sqlite3.connect('watchlist.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO stocks (stock_id, stock_name, note) 
+        VALUES (?, ?, ?)
+    ''', (stock_id, stock_name, note))
+    conn.commit()
+    conn.close()
+
+def get_all_records():
+    """讀取資料庫中的所有資料，並轉換成 Pandas 表格"""
+    conn = sqlite3.connect('watchlist.db')
+    # Pandas 非常強大，可以直接吃 SQL 語法並轉換成表格
+    df = pd.read_sql_query('SELECT stock_id AS 股票代號, stock_name AS 股票名稱, note AS 觀察筆記, create_time AS 新增時間 FROM stocks ORDER BY id DESC', conn)
+    conn.close()
+    return df
 
 # ==========================================
-# 3. 建立使用者輸入介面 (Python 結合 Streamlit 排版)
+# 3. Streamlit 網頁介面設計
 # ==========================================
-col1, col2 = st.columns(2)
-with col1:
-    stock_id = st.text_input("請輸入股票代號 (例如: 4746)", value="4746")
-with col2:
-    year = st.text_input("請輸入查詢年度 (西元年)", value="2025")
+st.set_page_config(page_title="我的股票觀察名單", page_icon="📁")
+st.title("📁 我的股票觀察名單 (SQLite 實戰)")
+st.markdown("這是一個串接 SQLite 資料庫的範例，您可以新增資料，並即時顯示在下方。")
 
-btn_col1, btn_col2 = st.columns([1, 1])
-with btn_col1:
-    search_btn = st.button("🔍 開始查詢", use_container_width=True)
-with btn_col2:
-    if st.button("🔄 重設 / 清除", use_container_width=True):
-        st.rerun()
+# --- 區塊 A：新增資料的表單 ---
+# 使用 st.form 可以把輸入框包起來，按下送出按鈕後才一次執行，避免網頁一直重新整理
+with st.form("add_stock_form"):
+    st.subheader("✍️ 新增觀察標的")
+    col1, col2 = st.columns(2)
+    with col1:
+        input_id = st.text_input("股票代號 (例: 2330)")
+    with col2:
+        input_name = st.text_input("股票名稱 (例: 台積電)")
+    
+    input_note = st.text_area("觀察筆記 (例: 預計跌破 1000 元買進)")
+    
+    # 表單的送出按鈕
+    submitted = st.form_submit_button("💾 儲存至資料庫", type="primary")
+
+    if submitted:
+        if input_id == "" or input_name == "":
+            st.error("⚠️ 股票代號與名稱為必填項目！")
+        else:
+            # 呼叫上面定義好的寫入功能
+            add_record(input_id, input_name, input_note)
+            st.success(f"✅ 成功將【{input_name}】加入資料庫！")
+            st.rerun() # 重新整理網頁，讓下方的表格立刻更新
 
 st.divider()
 
-# ==========================================
-# 4. 核心資料處理與爬蟲邏輯 (純 Python)
-# ==========================================
-if search_btn:
-    if not stock_id or not year:
-        st.warning("⚠️ 請輸入完整的股票代號與年度！")
-    else:
-        with st.spinner(f"正在抓取 【{stock_id}】 {year} 年的資料..."):
-            url = "https://api.finmindtrade.com/api/v4/data"
-            parameter = {
-                "dataset": "TaiwanStockFinancialStatements",
-                "data_id": str(stock_id),
-                "start_date": f"{year}-01-01",
-                "end_date": f"{year}-12-31"
-            }
+# --- 區塊 B：顯示資料庫內容 ---
+st.subheader("📋 目前資料庫內容")
 
-            try:
-                res = requests.get(url, params=parameter)
-                data = res.json()
+# 呼叫讀取功能，獲取表格資料
+df = get_all_records()
 
-                if data.get("msg") != "success" or len(data.get("data", [])) == 0:
-                    st.error("❌ 找不到相關資料，可能是股票代號錯誤，或該年度財報尚未公布。")
-                else:
-                    df = pd.DataFrame(data["data"])
-                    eps_df = df[df['type'] == 'EPS'].copy()
-
-                    if eps_df.empty:
-                        st.error("❌ 找不到該年度的 EPS 數據。")
-                    else:
-                        st.success(f"✅ 成功獲取 【{stock_id}】 {year} 年 EPS 資料！")
-                        
-                        total_eps = 0.0
-                        results = []
-
-                        for index, row in eps_df.iterrows():
-                            date = row['date']
-                            eps_value = float(row['value'])
-                            total_eps += eps_value
-
-                            if "-03-" in date: quarter = "Q1 (第一季)"
-                            elif "-06-" in date or "-05-" in date: quarter = "Q2 (第二季)"
-                            elif "-09-" in date or "-08-" in date: quarter = "Q3 (第三季)"
-                            elif "-12-" in date or "-11-" in date: quarter = "Q4 (第四季)"
-                            else: quarter = date
-
-                            results.append({"季度": quarter, "單季 EPS (元)": eps_value})
-
-                        # 顯示年度總和與表格
-                        st.metric(label=f"💰 {year} 年累計 EPS 總和", value=f"{total_eps:.2f} 元")
-                        st.table(pd.DataFrame(results))
-                        st.caption("💡 若只顯示到 Q3，代表 Q4 年報尚未公布。")
-
-            except Exception as e:
-                st.error(f"⚠️ 連線錯誤: {e}")
-
-# ==========================================
-# 5. 嵌入完整的 HTML/JS 互動區塊 (您的前端主戰場 2)
-# 這裡是一個獨立的 Iframe，可以盡情發揮您的 JavaScript 實力
-# ==========================================
-components.html(
-    """
-    <div style="text-align: center; margin-top: 30px; padding: 20px; background-color: #f8f9fa; border-radius: 10px; border: 2px dashed #adb5bd;">
-        <h4 style="color: #495057; font-family: sans-serif; margin-bottom: 15px;">👨‍💻 前端技能展示區</h4>
-        <button onclick="triggerInteractiveJS()" 
-                style="padding: 10px 20px; background-color: #28a745; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 16px;">
-            點擊觸發 JavaScript 動畫
-        </button>
-        <p id="js-output" style="margin-top: 15px; color: #dc3545; font-weight: bold; font-size: 18px; transition: 0.5s;"></p>
-    </div>
-
-    <script>
-        function triggerInteractiveJS() {
-            const output = document.getElementById('js-output');
-            output.innerText = '🎉 JS 執行成功！未來可以把 Chart.js 或 D3.js 的動態圖表寫在這個區塊！';
-            output.style.transform = 'scale(1.1)';
-            setTimeout(() => { output.style.transform = 'scale(1)'; }, 300);
-        }
-    </script>
-    """,
-    height=200
-)
+if df.empty:
+    st.info("💡 目前資料庫是空的，請在上方新增您的第一筆資料！")
+else:
+    # 使用 st.dataframe 顯示漂亮的互動式表格
+    st.dataframe(df, use_container_width=True, hide_index=True)
