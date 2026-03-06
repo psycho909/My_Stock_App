@@ -50,6 +50,9 @@ st.markdown("""
         .metric-title { font-size: 0.85rem; }
         .metric-delta { font-size: 0.9rem; }
     }
+    
+    /* 快捷鍵按鈕微調 */
+    div.stButton > button { border-radius: 20px; padding: 2px 10px; }
     </style>
     <h1 class="main-title">🦅 台股終極決策系統</h1>
 """, unsafe_allow_html=True)
@@ -66,7 +69,7 @@ if 'trigger_analysis' not in st.session_state:
     st.session_state.trigger_analysis = False
 
 def apply_shortcut(ticker):
-    """當點擊快捷鍵時，自動填入代碼並觸發分析"""
+    """當點擊快捷鍵時，自動將代碼填入輸入框並觸發分析"""
     st.session_state.stock_input = ticker
     st.session_state.trigger_analysis = True
 
@@ -76,7 +79,7 @@ def load_stock_mapping():
     mapping = {
         "0050": "元大台灣50", "0056": "元大高股息", "00878": "國泰永續高股息",
         "006208": "富邦台50", "00919": "群益台灣精選高息", "2330": "台積電",
-        "2317": "鴻海", "2454": "聯發科"
+        "2317": "鴻海", "2454": "聯發科", "00981A": "主動統一台股增長"
     }
     try:
         res = requests.get("https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL", timeout=5)
@@ -88,19 +91,22 @@ def load_stock_mapping():
     return mapping
 
 def resolve_stock(user_input, mapping):
-    user_input = str(user_input).strip()
-    if not user_input.isdigit():
-        for code, name in mapping.items():
-            if user_input in name:
-                return code, name
-        return user_input, user_input
-    name = mapping.get(user_input, "未知名稱")
-    return user_input, name
+    """強化的解析邏輯：支援大寫字母與模糊比對"""
+    user_input = str(user_input).strip().upper() # 轉大寫，解決輸入小寫 a 的問題
+    
+    if user_input in mapping:
+        return user_input, mapping[user_input]
+        
+    for code, name in mapping.items():
+        if user_input in name:
+            return code, name
+            
+    return user_input, user_input
 
 stock_dict = load_stock_mapping()
 
 # ==========================================
-# 3. HTML 卡片產生器 (已修正縮排 Bug)
+# 3. HTML 卡片產生器
 # ==========================================
 def create_html_card(title, value_str, delta=0, pct=0, neutral_text=None):
     if neutral_text:
@@ -117,7 +123,6 @@ def create_html_card(title, value_str, delta=0, pct=0, neutral_text=None):
             color_class = "text-gray"
             delta_html = "平盤"
             
-    # 【修復重點】將 HTML 寫成單行或不縮排，避免被 Markdown 誤判為程式碼區塊
     return f'<div class="metric-card"><div class="metric-title">{title}</div><div class="metric-value">{value_str}</div><div class="metric-delta {color_class}">{delta_html}</div></div>'
 
 # ==========================================
@@ -193,20 +198,16 @@ def fetch_taiwan_finance_news():
     return news_list
 
 # ==========================================
-# 5. 快捷鍵與操作面板
+# 5. 操作面板與智慧歷史紀錄
 # ==========================================
-st.markdown("⚡ **近期搜尋 / 快捷點擊：**")
-hist_cols = st.columns(5)
-for idx, h_ticker in enumerate(st.session_state.history):
-    _, h_name = resolve_stock(h_ticker, stock_dict)
-    # 綁定 on_click 讓按鈕具備執行能力
-    hist_cols[idx].button(f"{h_name}", key=f"btn_{h_ticker}", on_click=apply_shortcut, args=(h_ticker,))
+# 🚀 核心修復：先用 container 卡位，等歷史紀錄更新完再把按鈕畫上去
+history_container = st.container()
 
 col_input, col_btn_analyze, col_btn_refresh = st.columns([3, 2, 1])
 
 with col_input:
     # 綁定 session_state
-    raw_input = st.text_input("🔍 支援輸入台股代碼或名稱 (如: 00878, 台積電)：", key="stock_input")
+    raw_input = st.text_input("🔍 支援輸入台股代碼或名稱 (如: 00919, 鴻海)：", key="stock_input")
 
 with col_btn_analyze:
     st.markdown("<br>", unsafe_allow_html=True)
@@ -217,18 +218,30 @@ with col_btn_refresh:
     if st.button("🔄 重整", use_container_width=True):
         st.rerun()
 
-# 判斷是否觸發搜尋 (點擊了搜尋按鈕，或是點擊了快捷鍵)
 execute_search = search_btn or st.session_state.trigger_analysis
-
-# 解析目標股票
 target_ticker, target_name = resolve_stock(raw_input, stock_dict)
 
-# 更新歷史紀錄 (只在確實按下搜尋或快捷鍵時更新)
-if execute_search and target_ticker:
-    if target_ticker not in st.session_state.history and target_ticker.isdigit():
-        st.session_state.history.insert(0, target_ticker)
-        if len(st.session_state.history) > 5:
-            st.session_state.history.pop()
+# 🚀 歷史紀錄動態更新邏輯 (只要有輸入且跟目前第一名不同，就自動加入歷史)
+if target_ticker and (not st.session_state.history or target_ticker != st.session_state.history[0]):
+    # 如果已經存在，先拔掉
+    if target_ticker in st.session_state.history:
+        st.session_state.history.remove(target_ticker)
+    
+    # 插到最前面
+    st.session_state.history.insert(0, target_ticker)
+    
+    # 保持最多 5 個
+    if len(st.session_state.history) > 5:
+        st.session_state.history = st.session_state.history[:5]
+
+# 把更新完的歷史按鈕畫進剛剛的 container 裡
+with history_container:
+    st.markdown("⚡ **近期搜尋 / 快捷點擊：**")
+    hist_cols = st.columns(5)
+    for idx, h_ticker in enumerate(st.session_state.history):
+        _, h_name = resolve_stock(h_ticker, stock_dict)
+        # on_click 綁定了 callback，一按下去就會帶入代碼並自動執行分析
+        hist_cols[idx].button(f"{h_name}", key=f"btn_{h_ticker}", on_click=apply_shortcut, args=(h_ticker,))
 
 st.markdown("<br>", unsafe_allow_html=True)
 
@@ -257,7 +270,6 @@ if div_yield > 0:
 else:
     card_yield = create_html_card("估算年化殖利率", "無配息", neutral_text="-")
 
-# 輸出 HTML (使用單行字串，避免 Markdown 解析錯誤)
 st.markdown(f'<div class="grid-2">{card_stock}{card_yield}</div>', unsafe_allow_html=True)
 
 # ==========================================
@@ -277,7 +289,7 @@ st.divider()
 # 8. 主體分析模塊
 # ==========================================
 if execute_search:
-    st.session_state.trigger_analysis = False # 執行完畢後重置狀態
+    st.session_state.trigger_analysis = False # 執行完畢後重置狀態，避免無限迴圈
     
     if not target_ticker:
         st.warning("⚠️ 請輸入股票代碼或名稱！")
