@@ -26,7 +26,6 @@ st.markdown("""
     .news-item { border-bottom: 1px dashed #ced4da; padding: 12px 0; }
     .news-title { font-weight: bold; color: #0056b3; text-decoration: none; font-size: 1.05rem; display: block; margin-bottom: 5px;}
     .news-title:hover { color: #003d82; text-decoration: underline; }
-    .news-date { color: #6c757d; font-size: 0.85rem; }
     
     /* 儀表板卡片微調 */
     div[data-testid="metric-container"] {
@@ -44,7 +43,7 @@ st.markdown("""
 # 2. 核心資料抓取模組
 # ==========================================
 def fetch_current_price(ticker):
-    """即時抓取單一標的最新報價 (不使用快取，確保按鈕按下時絕對即時)"""
+    """即時抓取最新報價"""
     try:
         tk = yf.Ticker(ticker)
         hist = tk.history(period="5d")
@@ -58,10 +57,31 @@ def fetch_current_price(ticker):
     except:
         return None
 
+def fetch_dividend_yield(ticker, current_price):
+    """計算近一年(TTM)的真實殖利率"""
+    try:
+        tk = yf.Ticker(ticker)
+        divs = tk.dividends
+        if divs is not None and not divs.empty:
+            # 取得該時區的現在時間，並往前推一年
+            now = pd.Timestamp.now(tz=divs.index.tz) if divs.index.tz else pd.Timestamp.now()
+            one_year_ago = now - pd.DateOffset(years=1)
+            # 篩選過去一年內的配息
+            recent_divs = divs[divs.index >= one_year_ago]
+            
+            if not recent_divs.empty:
+                total_dividend = recent_divs.sum() # 加總近一年配息
+                if current_price > 0:
+                    div_yield = (total_dividend / current_price) * 100
+                    return total_dividend, div_yield
+    except:
+        pass
+    return 0.0, 0.0
+
 @st.cache_data(ttl=60)
 def fetch_global_indices():
     """抓取全球重要指標"""
-    tickers = {"標普 500": "^GSPC", "那斯達克": "^IXIC", "黃金(盎司)": "GC=F"}
+    tickers = {"標普 500": "^GSPC", "那斯達克": "^IXIC", "黃金期貨": "GC=F"}
     results = {}
     for name, ticker in tickers.items():
         data = fetch_current_price(ticker)
@@ -110,71 +130,91 @@ def fetch_taiwan_finance_news():
         for item in root.findall('.//item')[:5]:
             title = item.find('title').text
             link = item.find('link').text
-            pub_date = item.find('pubDate').text
-            news_list.append({'title': title, 'link': link, 'date': pub_date})
+            news_list.append({'title': title, 'link': link})
     except:
         pass
     return news_list
 
 # ==========================================
-# 3. 頂部模塊：輸入區與即時看盤儀表板
+# 3. 頂部模塊：操作面板與即時看板 (全新動線)
 # ==========================================
-st.markdown("### ⚡ 即時看盤儀表板")
+st.markdown("### ⚡ 全球與台股即時看板")
 
-# 將輸入框移到最上方，讓儀表板可以依據輸入動態改變
-stock_id = st.text_input("🔍 請輸入欲觀察的台股代碼 (如: 006208, 00878)：", value="006208")
+# 【改動 1】將輸入框、分析按鈕、重整按鈕並列在同一行
+col_input, col_btn_analyze, col_btn_refresh = st.columns([3, 2, 1])
 
-# 排版：[台股大盤] [當前個股] [重新整理按鈕]
-dash_col1, dash_col2, dash_col3 = st.columns([2, 2, 1])
+with col_input:
+    stock_id = st.text_input("🔍 請輸入欲觀察的台股代碼 (如: 006208, 00878)：", value="006208")
 
-with dash_col3:
+with col_btn_analyze:
     st.markdown("<br>", unsafe_allow_html=True)
-    # 按下此按鈕會觸發 st.rerun()，強制重新執行整個網頁，藉此抓取最新報價
+    search_btn = st.button("🚀 啟動完整技術與時事分析", use_container_width=True, type="primary")
+
+with col_btn_refresh:
+    st.markdown("<br>", unsafe_allow_html=True)
     if st.button("🔄 重新整理", use_container_width=True):
         st.rerun()
 
-with dash_col1:
-    taiex_data = fetch_current_price("^TWII")
+st.markdown("<br>", unsafe_allow_html=True)
+
+# 抓取大盤與個股即時數據
+taiex_data = fetch_current_price("^TWII")
+stock_ticker = f"{stock_id}.TW"
+stock_data = fetch_current_price(stock_ticker)
+
+if not stock_data or stock_data['price'] == 0:
+    stock_ticker = f"{stock_id}.TWO"
+    stock_data = fetch_current_price(stock_ticker)
+
+# 【改動 3】計算個股殖利率
+ttm_div, div_yield = 0.0, 0.0
+if stock_data and stock_data['price'] > 0:
+    ttm_div, div_yield = fetch_dividend_yield(stock_ticker, stock_data['price'])
+
+# 顯示第一排：台股大盤、個股報價、殖利率
+# 【改動 2】全面加上 delta_color="inverse" 確保紅漲綠跌
+dash1, dash2, dash3 = st.columns(3)
+
+with dash1:
     if taiex_data:
-        # delta_color="inverse" 讓台灣股市紅漲綠跌
         st.metric(label="📊 台股加權指數 (^TWII)", 
                   value=f"{taiex_data['price']:,.2f}", 
                   delta=f"{taiex_data['change']:.2f} ({taiex_data['pct']:.2f}%)", 
                   delta_color="inverse")
+with dash2:
+    if stock_data and stock_data['price'] > 0:
+        st.metric(label=f"🎯 關注個股 ({stock_id})", 
+                  value=f"{stock_data['price']:,.2f}", 
+                  delta=f"{stock_data['change']:.2f} ({stock_data['pct']:.2f}%)", 
+                  delta_color="inverse")
+    else:
+        st.metric(label=f"🎯 關注個股 ({stock_id})", value="無資料", delta="-")
 
-with dash_col2:
-    if stock_id:
-        # 自動判斷上市或上櫃
-        stock_data = fetch_current_price(f"{stock_id}.TW")
-        if not stock_data or stock_data['price'] == 0:
-            stock_data = fetch_current_price(f"{stock_id}.TWO")
-            
-        if stock_data and stock_data['price'] > 0:
-            st.metric(label=f"🎯 當前關注個股 ({stock_id})", 
-                      value=f"{stock_data['price']:,.2f}", 
-                      delta=f"{stock_data['change']:.2f} ({stock_data['pct']:.2f}%)", 
-                      delta_color="inverse")
-        else:
-            st.metric(label=f"🎯 當前關注個股 ({stock_id})", value="無資料", delta="-")
+with dash3:
+    if div_yield > 0:
+        st.metric(label="💸 當前估算殖利率 (近一年)", 
+                  value=f"{div_yield:.2f} %", 
+                  delta=f"近一年總配息: {ttm_div:.2f} 元", 
+                  delta_color="off") # 殖利率配息不需要紅綠變色
+    else:
+        st.metric(label="💸 當前估算殖利率", value="無配息紀錄", delta="-", delta_color="off")
 
-# 顯示其他全球重點指標 (S&P500, 納斯達克, 黃金)
-st.markdown("<br>", unsafe_allow_html=True)
+# 顯示第二排：全球大盤與黃金 (同樣統一紅漲綠跌)
 global_cols = st.columns(3)
 global_data = fetch_global_indices()
 idx = 0
 for name, data in global_data.items():
-    # 美股與黃金維持預設的綠漲紅跌 (normal)
-    global_cols[idx].metric(label=name, value=f"{data['price']:,.2f}", delta=f"{data['change']:.2f} ({data['pct']:.2f}%)")
+    global_cols[idx].metric(label=f"🌐 {name}", 
+                            value=f"{data['price']:,.2f}", 
+                            delta=f"{data['change']:.2f} ({data['pct']:.2f}%)",
+                            delta_color="inverse") # 統一台股習慣：紅漲綠跌
     idx += 1
 
 st.divider()
 
 # ==========================================
-# 4. 主體分析模塊 (長線大資金決策)
+# 4. 主體分析模塊 (點擊按鈕後觸發)
 # ==========================================
-st.markdown("### 🧠 大資金中長線進場決策")
-search_btn = st.button("🚀 啟動完整技術與時事分析", use_container_width=True, type="primary")
-
 if search_btn:
     if not stock_id:
         st.warning("⚠️ 請輸入股票代碼！")
