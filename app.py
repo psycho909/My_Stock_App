@@ -6,16 +6,16 @@ import requests
 import xml.etree.ElementTree as ET
 
 # ==========================================
-# 1. 頁面基本設定與自訂 CSS
+# 1. 頁面基本設定與 RWD 自訂 CSS
 # ==========================================
-st.set_page_config(page_title="台股實戰分析儀 (技術+籌碼+時事)", page_icon="🦅", layout="wide")
+st.set_page_config(page_title="台股實戰分析儀", page_icon="🦅", layout="wide")
 
 st.markdown("""
     <style>
     #MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;}
     .main-title { color: #1a252f; text-align: center; border-bottom: 3px solid #e74c3c; padding-bottom: 15px; margin-bottom: 20px; font-family: sans-serif; font-size: 1.8rem;}
     
-    /* 訊號卡片設計 */
+    /* 分析結果卡片設計 */
     .signal-box { padding: 20px; border-radius: 10px; margin-bottom: 15px; border-left: 6px solid; }
     .box-buy { background-color: #d4edda; color: #155724; border-left-color: #28a745; }
     .box-sell { background-color: #f8d7da; color: #721c24; border-left-color: #dc3545; }
@@ -25,27 +25,92 @@ st.markdown("""
     .signal-desc { font-size: 1rem; margin-bottom: 10px; }
     .signal-advice { font-size: 0.95rem; background: rgba(255,255,255,0.8); color:#000; padding: 10px; border-radius: 5px; margin-top: 10px;}
     .price-target { font-size: 1.1rem; color: #e74c3c; font-weight: bold; }
-    
-    /* 新聞卡片 */
     .news-item { border-bottom: 1px dashed #ced4da; padding: 12px 0; }
     .news-title { font-weight: bold; color: #0056b3; text-decoration: none; font-size: 1.05rem; display: block; margin-bottom: 5px;}
-    .news-title:hover { color: #003d82; text-decoration: underline; }
     
-    /* 儀表板卡片微調 (針對手機版視覺最佳化) */
-    div[data-testid="metric-container"] {
-        background-color: #f8f9fa;
+    /* ========================================= */
+    /* 🚀 專屬 RWD 儀表板網格系統 (突破 Streamlit 限制) */
+    /* ========================================= */
+    .metric-card {
+        background-color: #ffffff;
         border: 1px solid #e9ecef;
-        padding: 10px;
-        border-radius: 10px;
-        box-shadow: 2px 2px 5px rgba(0,0,0,0.05);
-        text-align: center; /* 讓文字置中，在手機上更好看 */
+        border-radius: 12px;
+        padding: 15px 10px;
+        text-align: center;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+    }
+    .metric-title { font-size: 0.95rem; color: #6c757d; font-weight: bold; margin-bottom: 8px; }
+    .metric-value { font-size: 1.6rem; font-weight: 900; color: #212529; margin: 0; }
+    .metric-delta { font-size: 1rem; font-weight: bold; margin-top: 5px; }
+    
+    /* 統一台灣習慣：紅漲綠跌 */
+    .text-red { color: #dc3545; }
+    .text-green { color: #28a745; }
+    .text-gray { color: #6c757d; font-weight: normal;}
+
+    /* 網格佈局：首頁關注 (永遠 2 欄) */
+    .grid-2 {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 15px;
+        margin-bottom: 20px;
+    }
+
+    /* 網格佈局：全球大盤 (PC 4 欄) */
+    .grid-4 {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 15px;
+        margin-bottom: 20px;
+    }
+
+    /* 📱 手機版專屬設定：螢幕寬度小於 768px 時觸發 */
+    @media (max-width: 768px) {
+        .grid-4 {
+            grid-template-columns: repeat(2, 1fr); /* 手機版強制變成 2 欄 */
+        }
+        .metric-value { font-size: 1.3rem; } /* 手機版字體稍微縮小避免跑版 */
+        .metric-title { font-size: 0.85rem; }
+        .metric-delta { font-size: 0.9rem; }
     }
     </style>
     <h1 class="main-title">🦅 台股終極決策系統</h1>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. 核心資料抓取模組
+# 2. HTML 卡片產生器 (取代原廠 st.metric)
+# ==========================================
+def create_html_card(title, value_str, delta=0, pct=0, neutral_text=None):
+    """將數據轉換成我們自訂的 HTML 卡片，強制紅漲綠跌"""
+    if neutral_text:
+        # 專門給「殖利率」用的中性顯示
+        color_class = "text-gray"
+        delta_html = neutral_text
+    else:
+        # 股價漲跌邏輯
+        if delta > 0:
+            color_class = "text-red"
+            delta_html = f"▲ {abs(delta):.2f} ({abs(pct):.2f}%)"
+        elif delta < 0:
+            color_class = "text-green"
+            delta_html = f"▼ {abs(delta):.2f} ({abs(pct):.2f}%)"
+        else:
+            color_class = "text-gray"
+            delta_html = "平盤"
+            
+    return f"""
+    <div class="metric-card">
+        <div class="metric-title">{title}</div>
+        <div class="metric-value">{value_str}</div>
+        <div class="metric-delta {color_class}">{delta_html}</div>
+    </div>
+    """
+
+# ==========================================
+# 3. 核心資料抓取模組
 # ==========================================
 def fetch_current_price(ticker):
     try:
@@ -80,7 +145,6 @@ def fetch_dividend_yield(ticker, current_price):
 
 @st.cache_data(ttl=60)
 def fetch_global_indices():
-    # 加入台股大盤，統整在一起方便後續兩兩排版
     tickers = {"台股大盤": "^TWII", "標普 500": "^GSPC", "那斯達克": "^IXIC", "黃金期貨": "GC=F"}
     results = {}
     for name, ticker in tickers.items():
@@ -94,14 +158,12 @@ def calculate_indicators(df, period=9):
     df['9W_Low'] = df['Low'].rolling(window=period).min()
     df['RSV'] = 100 * ((df['Close'] - df['9W_Low']) / (df['9W_High'] - df['9W_Low']))
     df['RSV'] = df['RSV'].fillna(50)
-    
     K_list, D_list = [50], [50]
     for rsv in df['RSV']:
         k = (2/3) * K_list[-1] + (1/3) * rsv
         d = (2/3) * D_list[-1] + (1/3) * k
         K_list.append(k)
         D_list.append(d)
-        
     df['K'] = K_list[1:]
     df['D'] = D_list[1:]
     df['13W_MA'] = df['Close'].rolling(window=13).mean()
@@ -136,19 +198,14 @@ def fetch_taiwan_finance_news():
     return news_list
 
 # ==========================================
-# 3. 頂部模塊：操作面板與即時看板
+# 4. 操作面板與輸入區
 # ==========================================
-
-# 輸入區塊並列排版
 col_input, col_btn_analyze, col_btn_refresh = st.columns([3, 2, 1])
-
 with col_input:
-    stock_id = st.text_input("🔍 請輸入觀察台股代碼：", value="006208")
-
+    stock_id = st.text_input("🔍 請輸入觀察台股代碼：", value="00878")
 with col_btn_analyze:
     st.markdown("<br>", unsafe_allow_html=True)
     search_btn = st.button("🚀 啟動完整分析", use_container_width=True, type="primary")
-
 with col_btn_refresh:
     st.markdown("<br>", unsafe_allow_html=True)
     if st.button("🔄 重整", use_container_width=True):
@@ -156,10 +213,9 @@ with col_btn_refresh:
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# 抓取個股資料
+# 抓取個股與殖利率資料
 stock_ticker = f"{stock_id}.TW"
 stock_data = fetch_current_price(stock_ticker)
-
 if not stock_data or stock_data['price'] == 0:
     stock_ticker = f"{stock_id}.TWO"
     stock_data = fetch_current_price(stock_ticker)
@@ -168,64 +224,52 @@ ttm_div, div_yield = 0.0, 0.0
 if stock_data and stock_data['price'] > 0:
     ttm_div, div_yield = fetch_dividend_yield(stock_ticker, stock_data['price'])
 
-# ---------------------------------------------
-# 【首頁重點】第一排：專注於您的個股與殖利率
-# ---------------------------------------------
+# ==========================================
+# 5. 【首頁關注】網格顯示 (永遠 2 欄)
+# ==========================================
 st.markdown("#### 🎯 首頁關注")
-row1_col1, row1_col2 = st.columns(2)
 
-with row1_col1:
-    if stock_data and stock_data['price'] > 0:
-        st.metric(label=f"關注個股 ({stock_id})", 
-                  value=f"{stock_data['price']:,.2f}", 
-                  delta=f"{stock_data['change']:.2f} ({stock_data['pct']:.2f}%)", 
-                  delta_color="inverse")
-    else:
-        st.metric(label=f"關注個股 ({stock_id})", value="無資料", delta="-")
+# 準備個股卡片 HTML
+if stock_data and stock_data['price'] > 0:
+    card_stock = create_html_card(f"個股報價 ({stock_id})", f"{stock_data['price']:,.2f}", stock_data['change'], stock_data['pct'])
+else:
+    card_stock = create_html_card(f"個股報價 ({stock_id})", "無資料", neutral_text="-")
 
-with row1_col2:
-    if div_yield > 0:
-        st.metric(label="估算年化殖利率", 
-                  value=f"{div_yield:.2f} %", 
-                  delta=f"近一年配息: {ttm_div:.2f} 元", 
-                  delta_color="off")
-    else:
-        st.metric(label="估算年化殖利率", value="無配息紀錄", delta="-", delta_color="off")
+# 準備殖利率卡片 HTML
+if div_yield > 0:
+    card_yield = create_html_card("估算年化殖利率", f"{div_yield:.2f} %", neutral_text=f"近一年配息: {ttm_div:.2f} 元")
+else:
+    card_yield = create_html_card("估算年化殖利率", "無配息", neutral_text="-")
 
-st.markdown("<br>", unsafe_allow_html=True)
+# 注入 HTML 網格 (自動套用上面的 grid-2 CSS)
+st.markdown(f"""
+    <div class="grid-2">
+        {card_stock}
+        {card_yield}
+    </div>
+""", unsafe_allow_html=True)
 
-# ---------------------------------------------
-# 【大盤區塊】第二排開始：全球大盤兩兩一排
-# ---------------------------------------------
+# ==========================================
+# 6. 【全球大盤】網格顯示 (PC 4 欄 / 手機 2 欄)
+# ==========================================
 st.markdown("#### 🌐 全球大盤與指數")
 global_data = fetch_global_indices()
 
-# 將字典轉換成列表，方便兩個兩個一組來排版
-global_items = list(global_data.items())
+cards_html = ""
+for name, data in global_data.items():
+    cards_html += create_html_card(f"📊 {name}", f"{data['price']:,.2f}", data['change'], data['pct'])
 
-for i in range(0, len(global_items), 2):
-    # 每次建立兩個欄位 (手機板會自適應換行或並排)
-    cols = st.columns(2)
-    
-    # 填入左邊卡片
-    name1, data1 = global_items[i]
-    cols[0].metric(label=f"📊 {name1}", 
-                   value=f"{data1['price']:,.2f}", 
-                   delta=f"{data1['change']:.2f} ({data1['pct']:.2f}%)",
-                   delta_color="inverse")
-    
-    # 如果還有下一筆，填入右邊卡片
-    if i + 1 < len(global_items):
-        name2, data2 = global_items[i+1]
-        cols[1].metric(label=f"📊 {name2}", 
-                       value=f"{data2['price']:,.2f}", 
-                       delta=f"{data2['change']:.2f} ({data2['pct']:.2f}%)",
-                       delta_color="inverse")
+# 注入 HTML 網格 (自動套用 grid-4，並在手機版自動觸發 media query 變成 2 欄)
+st.markdown(f"""
+    <div class="grid-4">
+        {cards_html}
+    </div>
+""", unsafe_allow_html=True)
 
 st.divider()
 
 # ==========================================
-# 4. 主體分析模塊 (點擊按鈕後觸發)
+# 7. 主體分析模塊 (點擊按鈕後觸發)
 # ==========================================
 if search_btn:
     if not stock_id:
@@ -241,8 +285,6 @@ if search_btn:
             else:
                 df = calculate_indicators(df)
                 current_price = df['Close'].iloc[-1]
-                current_K = df['K'].iloc[-1]
-                current_D = df['D'].iloc[-1]
                 ma_13 = df['13W_MA'].iloc[-1] if not pd.isna(df['13W_MA'].iloc[-1]) else 0
                 ma_26 = df['26W_MA'].iloc[-1] if not pd.isna(df['26W_MA'].iloc[-1]) else 0
                 ma_52 = df['52W_MA'].iloc[-1] if not pd.isna(df['52W_MA'].iloc[-1]) else 0
