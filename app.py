@@ -239,4 +239,18 @@ if search_btn:
                                 🎯 耐心等待季線回檔：約 <span class="price-target">{ma_13:.2f} 元</span>
                             </div>
                         </div>
-                        """,
+                        """, unsafe_allow_html=True)
+                    else:
+                        st.markdown(f"""
+                        <div class="signal-box box-buy">
+                            <div class="signal-title">🟢 常態回檔買點 (測試長線支撐)</div>
+                            <div class="signal-advice">
+                                🎯 目前的建議進場價：<span class="price-target">{current_price:.2f} 元</span><br>
+                                🎯 下方防守線：<span class="price-target">{ma_26:.2f} ~ {ma_52:.2f} 元</span>
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                    st.markdown("### 📈 近一年走勢與防守均線")
+                    chart_data = df[['Close', '13W_MA', '26W_MA', '52W_MA']].tail(52)
+                    st.line_chart(chart_data)
