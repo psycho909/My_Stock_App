@@ -2,7 +2,8 @@ import streamlit as st
 import streamlit.components.v1 as components
 import yfinance as yf
 import pandas as pd
-import numpy as np
+import requests
+import xml.etree.ElementTree as ET
 
 # ==========================================
 # 1. 頁面基本設定與自訂 CSS
@@ -22,8 +23,10 @@ st.markdown("""
     .signal-desc { font-size: 1rem; margin-bottom: 10px; }
     .signal-advice { font-size: 0.95rem; background: rgba(255,255,255,0.8); color:#000; padding: 10px; border-radius: 5px; margin-top: 10px;}
     .price-target { font-size: 1.1rem; color: #e74c3c; font-weight: bold; }
-    .news-item { border-bottom: 1px solid #ddd; padding: 10px 0; }
-    .news-title { font-weight: bold; color: #0056b3; text-decoration: none; }
+    .news-item { border-bottom: 1px dashed #ced4da; padding: 12px 0; }
+    .news-title { font-weight: bold; color: #0056b3; text-decoration: none; font-size: 1.05rem; display: block; margin-bottom: 5px;}
+    .news-title:hover { color: #003d82; text-decoration: underline; }
+    .news-date { color: #6c757d; font-size: 0.85rem; }
     </style>
     <h1 class="main-title">🦅 台股終極決策系統 (技術分析 + 時事恐慌偵測)</h1>
 """, unsafe_allow_html=True)
@@ -58,25 +61,35 @@ def fetch_stock_data(stock_id):
     if df.empty:
         ticker = f"{stock_id}.TWO"
         df = yf.Ticker(ticker).history(period="2y", interval="1wk")
-    return df, ticker
+    return df
 
 def fetch_vix():
     """抓取 S&P 500 VIX 恐慌指數"""
     vix_df = yf.Ticker("^VIX").history(period="5d")
     return vix_df['Close'].iloc[-1] if not vix_df.empty else 20.0
 
-def fetch_news(ticker_symbol):
-    """抓取該檔股票或大盤的即時新聞"""
+def fetch_taiwan_finance_news():
+    """透過 Google News RSS 抓取台灣最新財經頭條"""
+    url = "https://news.google.com/rss/headlines/section/topic/BUSINESS?hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
+    news_list = []
     try:
-        news = yf.Ticker(ticker_symbol).news
-        return news[:5] # 只取最新的 5 則
-    except:
-        return []
+        response = requests.get(url, timeout=5)
+        root = ET.fromstring(response.content)
+        # 找尋前 5 則新聞
+        for item in root.findall('.//item')[:5]:
+            title = item.find('title').text
+            link = item.find('link').text
+            # Google News 的標題通常會附帶來源，例如 "台股大跌... - 經濟日報"
+            pub_date = item.find('pubDate').text
+            news_list.append({'title': title, 'link': link, 'date': pub_date})
+    except Exception as e:
+        pass
+    return news_list
 
 # ==========================================
 # 3. 系統介面與分析邏輯
 # ==========================================
-st.markdown("結合 **全球恐慌指數 (VIX)**、**即時新聞** 與 **週 KD 均線**，為大資金佈局找出最安全的危機入市點。")
+st.markdown("結合 **全球恐慌指數 (VIX)**、**Google 財經即時頭條** 與 **週 KD 均線**，為大資金佈局找出最安全的危機入市點。")
 
 col1, col2 = st.columns([4, 1])
 with col1:
@@ -92,9 +105,11 @@ if search_btn:
         st.warning("⚠️ 請輸入股票代碼！")
     else:
         with st.spinner("正在掃描全球總經數據與台股籌碼，請稍候..."):
-            df, exact_ticker = fetch_stock_data(stock_id)
+            df = fetch_stock_data(stock_id)
             vix_value = fetch_vix()
-            news_data = fetch_news(exact_ticker)
+            
+            # 抓取 Google 財經新聞
+            news_data = fetch_taiwan_finance_news()
             
             if df.empty:
                 st.error("❌ 找不到該檔股票，請確認代碼是否正確。")
@@ -115,7 +130,6 @@ if search_btn:
 
                 with right_col:
                     st.markdown("### 🌍 總體經濟與市場情緒")
-                    # 判斷 VIX 恐慌程度
                     if vix_value >= 30:
                         st.error(f"🚨 恐慌指數 (VIX): {vix_value:.2f} (極度恐慌)")
                         st.markdown("**系統判定：黑天鵝事件/系統性風險！市場正處於非理性拋售。**")
@@ -126,20 +140,21 @@ if search_btn:
                         st.success(f"✅ 恐慌指數 (VIX): {vix_value:.2f} (情緒穩定)")
                         st.markdown("**系統判定：全球總經環境相對穩定，依技術面操作即可。**")
                     
-                    st.markdown("### 📰 最新時事頭條")
+                    st.markdown("### 📰 Google 最新財經頭條")
                     if news_data:
                         for item in news_data:
-                            title = item.get('title', '無標題')
-                            link = item.get('link', '#')
-                            publisher = item.get('publisher', '未知來源')
+                            title = item['title']
+                            link = item['link']
+                            # 擷取發布日期的前段即可 (過濾掉繁雜的時區字眼)
+                            date_str = item['date'][:22] 
                             st.markdown(f"""
                             <div class="news-item">
                                 <a href="{link}" target="_blank" class="news-title">{title}</a>
-                                <br><small style="color: #6c757d;">來源: {publisher}</small>
+                                <span class="news-date">🕒 {date_str}</span>
                             </div>
                             """, unsafe_allow_html=True)
                     else:
-                        st.info("目前無最新相關新聞。")
+                        st.info("暫時無法取得新聞，請稍後再試。")
 
                 with left_col:
                     st.markdown(f"### 🎯 【{stock_id}】 數據更新至：{last_date}")
@@ -150,22 +165,19 @@ if search_btn:
                     
                     st.markdown("### 💰 系統實戰策略建議")
                     
-                    # 終極判斷邏輯：如果發生戰爭/黑天鵝 (VIX >= 30) 且股價下跌
                     if vix_value >= 30 and current_price <= ma_13:
                         st.markdown(f"""
                         <div class="signal-box box-blackswan">
                             <div class="signal-title">🚨 危機入市模式啟動 (黑天鵝/突發利空)</div>
-                            <div class="signal-desc">全球發生重大系統性風險(如戰爭、金融風暴)。對於 ETF 大資金部位來說，這是十年難得一見的財富重分配機會！</div>
+                            <div class="signal-desc">全球發生重大系統性風險。對於大資金部位來說，這是十年難得一見的財富重分配機會！</div>
                             <div class="signal-advice">
                                 🎯 <b>【大資金金字塔建倉法】</b><br>
-                                1. <b>確認新聞：</b> 右側新聞若為非經濟因素(如政治、戰爭)，勇敢接刀。<br>
-                                2. <b>第一批 (恐慌殺盤)：<span class="price-target">{current_price:.2f} 元</span></b> ➡️ 投入 <b>20%</b> 資金。<br>
-                                3. <b>第二批 (跌至半年線)：約 <span class="price-target">{ma_26:.2f} 元</span></b> ➡️ 投入 <b>30%</b> 資金。<br>
-                                4. <b>第三批 (跌至年線)：約 <span class="price-target">{ma_52:.2f} 元</span></b> ➡️ 投入 <b>50%</b> 資金 (重壓區)。
+                                1. <b>第一批 (恐慌殺盤)：<span class="price-target">{current_price:.2f} 元</span></b> ➡️ 投入 <b>20%</b> 資金。<br>
+                                2. <b>第二批 (跌至半年線)：約 <span class="price-target">{ma_26:.2f} 元</span></b> ➡️ 投入 <b>30%</b> 資金。<br>
+                                3. <b>第三批 (跌至年線)：約 <span class="price-target">{ma_52:.2f} 元</span></b> ➡️ 投入 <b>50%</b> 資金 (重壓區)。
                             </div>
                         </div>
                         """, unsafe_allow_html=True)
-                    # 正常技術面判斷
                     elif current_price > ma_13:
                         st.markdown(f"""
                         <div class="signal-box box-warn">
@@ -190,7 +202,6 @@ if search_btn:
                         </div>
                         """, unsafe_allow_html=True)
 
-                    # 走勢圖
                     st.markdown("### 📈 近一年走勢與防守均線")
                     chart_data = df[['Close', '13W_MA', '26W_MA', '52W_MA']].tail(52)
                     st.line_chart(chart_data)
