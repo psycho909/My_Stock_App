@@ -27,13 +27,45 @@ st.markdown("""
     .news-title { font-weight: bold; color: #0056b3; text-decoration: none; font-size: 1.05rem; display: block; margin-bottom: 5px;}
     .news-title:hover { color: #003d82; text-decoration: underline; }
     .news-date { color: #6c757d; font-size: 0.85rem; }
+    
+    /* 儀表板卡片微調 */
+    div[data-testid="metric-container"] {
+        background-color: #f8f9fa;
+        border: 1px solid #e9ecef;
+        padding: 10px 15px;
+        border-radius: 8px;
+        box-shadow: 1px 1px 3px rgba(0,0,0,0.05);
+    }
     </style>
     <h1 class="main-title">🦅 台股終極決策系統 (技術分析 + 時事恐慌偵測)</h1>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. 核心資料抓取與運算邏輯
+# 2. 核心資料抓取模組
 # ==========================================
+@st.cache_data(ttl=60) # 快取 60 秒，避免頻繁重整導致 Yahoo 阻擋
+def fetch_global_indices():
+    """抓取全球四大指數與黃金的最新報價"""
+    # ^TWII: 台股加權, ^GSPC: 標普500, ^DJI: 道瓊, ^IXIC: 那斯達克, GC=F: 黃金期貨
+    tickers = {"台股大盤": "^TWII", "標普 500": "^GSPC", "道瓊工業": "^DJI", "那斯達克": "^IXIC", "黃金期貨(盎司)": "GC=F"}
+    results = {}
+    
+    for name, ticker in tickers.items():
+        try:
+            tk = yf.Ticker(ticker)
+            hist = tk.history(period="5d")
+            if len(hist) >= 2:
+                current_price = hist['Close'].iloc[-1]
+                prev_price = hist['Close'].iloc[-2]
+                change = current_price - prev_price
+                pct_change = (change / prev_price) * 100
+                results[name] = {"price": current_price, "change": change, "pct": pct_change}
+            else:
+                results[name] = {"price": 0, "change": 0, "pct": 0}
+        except:
+            results[name] = {"price": 0, "change": 0, "pct": 0}
+    return results
+
 def calculate_indicators(df, period=9):
     df['9W_High'] = df['High'].rolling(window=period).max()
     df['9W_Low'] = df['Low'].rolling(window=period).min()
@@ -64,32 +96,51 @@ def fetch_stock_data(stock_id):
     return df
 
 def fetch_vix():
-    """抓取 S&P 500 VIX 恐慌指數"""
     vix_df = yf.Ticker("^VIX").history(period="5d")
     return vix_df['Close'].iloc[-1] if not vix_df.empty else 20.0
 
 def fetch_taiwan_finance_news():
-    """透過 Google News RSS 抓取台灣最新財經頭條"""
     url = "https://news.google.com/rss/headlines/section/topic/BUSINESS?hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
     news_list = []
     try:
         response = requests.get(url, timeout=5)
         root = ET.fromstring(response.content)
-        # 找尋前 5 則新聞
         for item in root.findall('.//item')[:5]:
             title = item.find('title').text
             link = item.find('link').text
-            # Google News 的標題通常會附帶來源，例如 "台股大跌... - 經濟日報"
             pub_date = item.find('pubDate').text
             news_list.append({'title': title, 'link': link, 'date': pub_date})
-    except Exception as e:
+    except:
         pass
     return news_list
 
 # ==========================================
-# 3. 系統介面與分析邏輯
+# 3. 頂部模塊：全球市場儀表板
 # ==========================================
-st.markdown("結合 **全球恐慌指數 (VIX)**、**Google 財經即時頭條** 與 **週 KD 均線**，為大資金佈局找出最安全的危機入市點。")
+st.markdown("### 🌐 全球即時行情儀表板")
+with st.spinner("正在獲取全球最新行情..."):
+    global_data = fetch_global_indices()
+    
+    # 建立 5 個並排的欄位來顯示數據
+    cols = st.columns(5)
+    for idx, (name, data) in enumerate(global_data.items()):
+        if data['price'] > 0:
+            # 判斷漲跌幅的顏色 (台灣習慣紅漲綠跌，但 Streamlit 預設是綠漲紅跌)
+            # 這裡我們使用 Streamlit 內建的 metric，若要反轉顏色可加上 delta_color="inverse"
+            cols[idx].metric(
+                label=name, 
+                value=f"{data['price']:,.2f}", 
+                delta=f"{data['change']:.2f} ({data['pct']:.2f}%)"
+            )
+        else:
+            cols[idx].metric(label=name, value="無資料", delta="-")
+
+st.divider()
+
+# ==========================================
+# 4. 主體分析模塊
+# ==========================================
+st.markdown("結合 **全球恐慌指數 (VIX)**、**即時頭條** 與 **週 KD 均線**，為大資金佈局找出最安全的入市點。")
 
 col1, col2 = st.columns([4, 1])
 with col1:
@@ -104,11 +155,9 @@ if search_btn:
     if not stock_id:
         st.warning("⚠️ 請輸入股票代碼！")
     else:
-        with st.spinner("正在掃描全球總經數據與台股籌碼，請稍候..."):
+        with st.spinner("正在掃描技術指標與總經數據，請稍候..."):
             df = fetch_stock_data(stock_id)
             vix_value = fetch_vix()
-            
-            # 抓取 Google 財經新聞
             news_data = fetch_taiwan_finance_news()
             
             if df.empty:
@@ -123,9 +172,6 @@ if search_btn:
                 ma_52 = df['52W_MA'].iloc[-1] if not pd.isna(df['52W_MA'].iloc[-1]) else 0
                 last_date = df.index[-1].strftime("%Y-%m-%d")
 
-                # ========================================
-                # 版面分割：左邊技術面，右邊消息面
-                # ========================================
                 left_col, right_col = st.columns([2, 1])
 
                 with right_col:
@@ -135,7 +181,7 @@ if search_btn:
                         st.markdown("**系統判定：黑天鵝事件/系統性風險！市場正處於非理性拋售。**")
                     elif vix_value >= 20:
                         st.warning(f"⚠️ 恐慌指數 (VIX): {vix_value:.2f} (市場警戒)")
-                        st.markdown("**系統判定：市場波動加劇，投資人情緒緊張，隨時可能回檔。**")
+                        st.markdown("**系統判定：市場波動加劇，隨時可能回檔。**")
                     else:
                         st.success(f"✅ 恐慌指數 (VIX): {vix_value:.2f} (情緒穩定)")
                         st.markdown("**系統判定：全球總經環境相對穩定，依技術面操作即可。**")
@@ -145,7 +191,6 @@ if search_btn:
                         for item in news_data:
                             title = item['title']
                             link = item['link']
-                            # 擷取發布日期的前段即可 (過濾掉繁雜的時區字眼)
                             date_str = item['date'][:22] 
                             st.markdown(f"""
                             <div class="news-item">
@@ -185,7 +230,7 @@ if search_btn:
                             <div class="signal-desc">目前股價偏高，且市場沒有恐慌跡象，不適合大資金單筆進場。</div>
                             <div class="signal-advice">
                                 🎯 <b>耐心等待季線回檔：約 <span class="price-target">{ma_13:.2f} 元</span></b><br>
-                                - 建議將資金保留，或僅用極小資金(5%)定期定額買進。
+                                - 建議將資金保留，或僅用極小資金定期定額買進。
                             </div>
                         </div>
                         """, unsafe_allow_html=True)
