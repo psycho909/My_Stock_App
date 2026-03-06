@@ -13,7 +13,9 @@ st.set_page_config(page_title="台股實戰分析儀 (技術+籌碼+時事)", pa
 st.markdown("""
     <style>
     #MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;}
-    .main-title { color: #1a252f; text-align: center; border-bottom: 3px solid #e74c3c; padding-bottom: 15px; margin-bottom: 20px; font-family: sans-serif; }
+    .main-title { color: #1a252f; text-align: center; border-bottom: 3px solid #e74c3c; padding-bottom: 15px; margin-bottom: 20px; font-family: sans-serif; font-size: 1.8rem;}
+    
+    /* 訊號卡片設計 */
     .signal-box { padding: 20px; border-radius: 10px; margin-bottom: 15px; border-left: 6px solid; }
     .box-buy { background-color: #d4edda; color: #155724; border-left-color: #28a745; }
     .box-sell { background-color: #f8d7da; color: #721c24; border-left-color: #dc3545; }
@@ -23,27 +25,29 @@ st.markdown("""
     .signal-desc { font-size: 1rem; margin-bottom: 10px; }
     .signal-advice { font-size: 0.95rem; background: rgba(255,255,255,0.8); color:#000; padding: 10px; border-radius: 5px; margin-top: 10px;}
     .price-target { font-size: 1.1rem; color: #e74c3c; font-weight: bold; }
+    
+    /* 新聞卡片 */
     .news-item { border-bottom: 1px dashed #ced4da; padding: 12px 0; }
     .news-title { font-weight: bold; color: #0056b3; text-decoration: none; font-size: 1.05rem; display: block; margin-bottom: 5px;}
     .news-title:hover { color: #003d82; text-decoration: underline; }
     
-    /* 儀表板卡片微調 */
+    /* 儀表板卡片微調 (針對手機版視覺最佳化) */
     div[data-testid="metric-container"] {
         background-color: #f8f9fa;
         border: 1px solid #e9ecef;
-        padding: 15px;
+        padding: 10px;
         border-radius: 10px;
         box-shadow: 2px 2px 5px rgba(0,0,0,0.05);
+        text-align: center; /* 讓文字置中，在手機上更好看 */
     }
     </style>
-    <h1 class="main-title">🦅 台股終極決策系統 (技術分析 + 時事恐慌偵測)</h1>
+    <h1 class="main-title">🦅 台股終極決策系統</h1>
 """, unsafe_allow_html=True)
 
 # ==========================================
 # 2. 核心資料抓取模組
 # ==========================================
 def fetch_current_price(ticker):
-    """即時抓取最新報價"""
     try:
         tk = yf.Ticker(ticker)
         hist = tk.history(period="5d")
@@ -58,19 +62,15 @@ def fetch_current_price(ticker):
         return None
 
 def fetch_dividend_yield(ticker, current_price):
-    """計算近一年(TTM)的真實殖利率"""
     try:
         tk = yf.Ticker(ticker)
         divs = tk.dividends
         if divs is not None and not divs.empty:
-            # 取得該時區的現在時間，並往前推一年
             now = pd.Timestamp.now(tz=divs.index.tz) if divs.index.tz else pd.Timestamp.now()
             one_year_ago = now - pd.DateOffset(years=1)
-            # 篩選過去一年內的配息
             recent_divs = divs[divs.index >= one_year_ago]
-            
             if not recent_divs.empty:
-                total_dividend = recent_divs.sum() # 加總近一年配息
+                total_dividend = recent_divs.sum()
                 if current_price > 0:
                     div_yield = (total_dividend / current_price) * 100
                     return total_dividend, div_yield
@@ -80,8 +80,8 @@ def fetch_dividend_yield(ticker, current_price):
 
 @st.cache_data(ttl=60)
 def fetch_global_indices():
-    """抓取全球重要指標"""
-    tickers = {"標普 500": "^GSPC", "那斯達克": "^IXIC", "黃金期貨": "GC=F"}
+    # 加入台股大盤，統整在一起方便後續兩兩排版
+    tickers = {"台股大盤": "^TWII", "標普 500": "^GSPC", "那斯達克": "^IXIC", "黃金期貨": "GC=F"}
     results = {}
     for name, ticker in tickers.items():
         data = fetch_current_price(ticker)
@@ -136,29 +136,27 @@ def fetch_taiwan_finance_news():
     return news_list
 
 # ==========================================
-# 3. 頂部模塊：操作面板與即時看板 (全新動線)
+# 3. 頂部模塊：操作面板與即時看板
 # ==========================================
-st.markdown("### ⚡ 全球與台股即時看板")
 
-# 【改動 1】將輸入框、分析按鈕、重整按鈕並列在同一行
+# 輸入區塊並列排版
 col_input, col_btn_analyze, col_btn_refresh = st.columns([3, 2, 1])
 
 with col_input:
-    stock_id = st.text_input("🔍 請輸入欲觀察的台股代碼 (如: 006208, 00878)：", value="006208")
+    stock_id = st.text_input("🔍 請輸入觀察台股代碼：", value="006208")
 
 with col_btn_analyze:
     st.markdown("<br>", unsafe_allow_html=True)
-    search_btn = st.button("🚀 啟動完整技術與時事分析", use_container_width=True, type="primary")
+    search_btn = st.button("🚀 啟動完整分析", use_container_width=True, type="primary")
 
 with col_btn_refresh:
     st.markdown("<br>", unsafe_allow_html=True)
-    if st.button("🔄 重新整理", use_container_width=True):
+    if st.button("🔄 重整", use_container_width=True):
         st.rerun()
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# 抓取大盤與個股即時數據
-taiex_data = fetch_current_price("^TWII")
+# 抓取個股資料
 stock_ticker = f"{stock_id}.TW"
 stock_data = fetch_current_price(stock_ticker)
 
@@ -166,49 +164,63 @@ if not stock_data or stock_data['price'] == 0:
     stock_ticker = f"{stock_id}.TWO"
     stock_data = fetch_current_price(stock_ticker)
 
-# 【改動 3】計算個股殖利率
 ttm_div, div_yield = 0.0, 0.0
 if stock_data and stock_data['price'] > 0:
     ttm_div, div_yield = fetch_dividend_yield(stock_ticker, stock_data['price'])
 
-# 顯示第一排：台股大盤、個股報價、殖利率
-# 【改動 2】全面加上 delta_color="inverse" 確保紅漲綠跌
-dash1, dash2, dash3 = st.columns(3)
+# ---------------------------------------------
+# 【首頁重點】第一排：專注於您的個股與殖利率
+# ---------------------------------------------
+st.markdown("#### 🎯 首頁關注")
+row1_col1, row1_col2 = st.columns(2)
 
-with dash1:
-    if taiex_data:
-        st.metric(label="📊 台股加權指數 (^TWII)", 
-                  value=f"{taiex_data['price']:,.2f}", 
-                  delta=f"{taiex_data['change']:.2f} ({taiex_data['pct']:.2f}%)", 
-                  delta_color="inverse")
-with dash2:
+with row1_col1:
     if stock_data and stock_data['price'] > 0:
-        st.metric(label=f"🎯 關注個股 ({stock_id})", 
+        st.metric(label=f"關注個股 ({stock_id})", 
                   value=f"{stock_data['price']:,.2f}", 
                   delta=f"{stock_data['change']:.2f} ({stock_data['pct']:.2f}%)", 
                   delta_color="inverse")
     else:
-        st.metric(label=f"🎯 關注個股 ({stock_id})", value="無資料", delta="-")
+        st.metric(label=f"關注個股 ({stock_id})", value="無資料", delta="-")
 
-with dash3:
+with row1_col2:
     if div_yield > 0:
-        st.metric(label="💸 當前估算殖利率 (近一年)", 
+        st.metric(label="估算年化殖利率", 
                   value=f"{div_yield:.2f} %", 
-                  delta=f"近一年總配息: {ttm_div:.2f} 元", 
-                  delta_color="off") # 殖利率配息不需要紅綠變色
+                  delta=f"近一年配息: {ttm_div:.2f} 元", 
+                  delta_color="off")
     else:
-        st.metric(label="💸 當前估算殖利率", value="無配息紀錄", delta="-", delta_color="off")
+        st.metric(label="估算年化殖利率", value="無配息紀錄", delta="-", delta_color="off")
 
-# 顯示第二排：全球大盤與黃金 (同樣統一紅漲綠跌)
-global_cols = st.columns(3)
+st.markdown("<br>", unsafe_allow_html=True)
+
+# ---------------------------------------------
+# 【大盤區塊】第二排開始：全球大盤兩兩一排
+# ---------------------------------------------
+st.markdown("#### 🌐 全球大盤與指數")
 global_data = fetch_global_indices()
-idx = 0
-for name, data in global_data.items():
-    global_cols[idx].metric(label=f"🌐 {name}", 
-                            value=f"{data['price']:,.2f}", 
-                            delta=f"{data['change']:.2f} ({data['pct']:.2f}%)",
-                            delta_color="inverse") # 統一台股習慣：紅漲綠跌
-    idx += 1
+
+# 將字典轉換成列表，方便兩個兩個一組來排版
+global_items = list(global_data.items())
+
+for i in range(0, len(global_items), 2):
+    # 每次建立兩個欄位 (手機板會自適應換行或並排)
+    cols = st.columns(2)
+    
+    # 填入左邊卡片
+    name1, data1 = global_items[i]
+    cols[0].metric(label=f"📊 {name1}", 
+                   value=f"{data1['price']:,.2f}", 
+                   delta=f"{data1['change']:.2f} ({data1['pct']:.2f}%)",
+                   delta_color="inverse")
+    
+    # 如果還有下一筆，填入右邊卡片
+    if i + 1 < len(global_items):
+        name2, data2 = global_items[i+1]
+        cols[1].metric(label=f"📊 {name2}", 
+                       value=f"{data2['price']:,.2f}", 
+                       delta=f"{data2['change']:.2f} ({data2['pct']:.2f}%)",
+                       delta_color="inverse")
 
 st.divider()
 
@@ -262,7 +274,7 @@ if search_btn:
                     if vix_value >= 30 and current_price <= ma_13:
                         st.markdown(f"""
                         <div class="signal-box box-blackswan">
-                            <div class="signal-title">🚨 危機入市模式啟動 (黑天鵝/突發利空)</div>
+                            <div class="signal-title">🚨 危機入市模式啟動</div>
                             <div class="signal-desc">全球發生系統性風險。這是十年難得一見的重分配機會！</div>
                             <div class="signal-advice">
                                 🎯 第一批 (現價)：<span class="price-target">{current_price:.2f} 元</span> (投入 20%)<br>
