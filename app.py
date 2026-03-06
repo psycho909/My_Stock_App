@@ -50,40 +50,35 @@ st.markdown("""
         .metric-title { font-size: 0.85rem; }
         .metric-delta { font-size: 0.9rem; }
     }
-    
-    /* 快捷鍵按鈕微調 */
-    div.stButton > button {
-        border-radius: 20px;
-        padding: 2px 10px;
-    }
     </style>
     <h1 class="main-title">🦅 台股終極決策系統</h1>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. 狀態管理 (Session State) 與 名稱解析
+# 2. 狀態管理 (Session State) 與 回呼函式
 # ==========================================
-# 初始化搜尋歷史與輸入框狀態
+# 初始化記憶區塊
 if 'history' not in st.session_state:
-    st.session_state.history = ['006208', '00878', '2330'] # 預設快捷鍵
+    st.session_state.history = ['006208', '00878', '2330']
 if 'stock_input' not in st.session_state:
     st.session_state.stock_input = '006208'
+if 'trigger_analysis' not in st.session_state:
+    st.session_state.trigger_analysis = False
 
-def set_stock_input(ticker_or_name):
-    """點擊快捷鍵時，將值塞入輸入框的回呼函式"""
-    st.session_state.stock_input = ticker_or_name
+def apply_shortcut(ticker):
+    """當點擊快捷鍵時，自動填入代碼並觸發分析"""
+    st.session_state.stock_input = ticker
+    st.session_state.trigger_analysis = True
 
-@st.cache_data(ttl=86400) # 快取一天
+@st.cache_data(ttl=86400)
 def load_stock_mapping():
-    """抓取證交所 OpenAPI 建立名稱與代碼的字典"""
-    # 預設一些常見的 ETF 與股票，確保網路斷線時依然可用
+    """抓取台股名稱對照表"""
     mapping = {
         "0050": "元大台灣50", "0056": "元大高股息", "00878": "國泰永續高股息",
         "006208": "富邦台50", "00919": "群益台灣精選高息", "2330": "台積電",
-        "2317": "鴻海", "2454": "聯發科", "4746": "台耀", "00981A": "主動統一台股增長"
+        "2317": "鴻海", "2454": "聯發科"
     }
     try:
-        # 抓取台股上市清單
         res = requests.get("https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL", timeout=5)
         if res.status_code == 200:
             for item in res.json():
@@ -93,25 +88,19 @@ def load_stock_mapping():
     return mapping
 
 def resolve_stock(user_input, mapping):
-    """解析輸入：判斷是代碼還是名稱"""
     user_input = str(user_input).strip()
-    
-    # 如果輸入的是名稱 (中文字)
     if not user_input.isdigit():
         for code, name in mapping.items():
-            if user_input in name: # 支援模糊搜尋，如輸入「富邦台」會配對到「富邦台50」
+            if user_input in name:
                 return code, name
-        return user_input, user_input # 找不到則原樣回傳
-        
-    # 如果輸入的是代碼
+        return user_input, user_input
     name = mapping.get(user_input, "未知名稱")
     return user_input, name
 
-# 載入台股字典
 stock_dict = load_stock_mapping()
 
 # ==========================================
-# 3. HTML 卡片產生器
+# 3. HTML 卡片產生器 (已修正縮排 Bug)
 # ==========================================
 def create_html_card(title, value_str, delta=0, pct=0, neutral_text=None):
     if neutral_text:
@@ -127,13 +116,9 @@ def create_html_card(title, value_str, delta=0, pct=0, neutral_text=None):
         else:
             color_class = "text-gray"
             delta_html = "平盤"
-    return f"""
-    <div class="metric-card">
-        <div class="metric-title">{title}</div>
-        <div class="metric-value">{value_str}</div>
-        <div class="metric-delta {color_class}">{delta_html}</div>
-    </div>
-    """
+            
+    # 【修復重點】將 HTML 寫成單行或不縮排，避免被 Markdown 誤判為程式碼區塊
+    return f'<div class="metric-card"><div class="metric-title">{title}</div><div class="metric-value">{value_str}</div><div class="metric-delta {color_class}">{delta_html}</div></div>'
 
 # ==========================================
 # 4. 核心資料抓取模組
@@ -143,10 +128,14 @@ def fetch_current_price(ticker):
         tk = yf.Ticker(ticker)
         hist = tk.history(period="5d")
         if len(hist) >= 2:
-            return {"price": hist['Close'].iloc[-1], "change": hist['Close'].iloc[-1] - hist['Close'].iloc[-2], "pct": ((hist['Close'].iloc[-1] - hist['Close'].iloc[-2]) / hist['Close'].iloc[-2]) * 100}
-        return None
+            current_price = hist['Close'].iloc[-1]
+            prev_price = hist['Close'].iloc[-2]
+            change = current_price - prev_price
+            pct_change = (change / prev_price) * 100
+            return {"price": current_price, "change": change, "pct": pct_change}
     except:
-        return None
+        pass
+    return None
 
 def fetch_dividend_yield(ticker, current_price):
     try:
@@ -204,21 +193,19 @@ def fetch_taiwan_finance_news():
     return news_list
 
 # ==========================================
-# 5. 操作面板與快捷鍵區
+# 5. 快捷鍵與操作面板
 # ==========================================
-# 顯示快捷鍵歷史紀錄
-st.markdown("⚡ **近期搜尋 / 快捷鍵：**")
+st.markdown("⚡ **近期搜尋 / 快捷點擊：**")
 hist_cols = st.columns(5)
 for idx, h_ticker in enumerate(st.session_state.history):
-    # 解析歷史代碼的名稱顯示在按鈕上
     _, h_name = resolve_stock(h_ticker, stock_dict)
-    hist_cols[idx].button(f"{h_name}", key=f"btn_{h_ticker}", on_click=set_stock_input, args=(h_ticker,))
+    # 綁定 on_click 讓按鈕具備執行能力
+    hist_cols[idx].button(f"{h_name}", key=f"btn_{h_ticker}", on_click=apply_shortcut, args=(h_ticker,))
 
-# 輸入區塊並列排版 (使用 session_state 綁定)
 col_input, col_btn_analyze, col_btn_refresh = st.columns([3, 2, 1])
 
 with col_input:
-    # 這裡的 key="stock_input" 讓它與 session_state 完美連動
+    # 綁定 session_state
     raw_input = st.text_input("🔍 支援輸入台股代碼或名稱 (如: 00878, 台積電)：", key="stock_input")
 
 with col_btn_analyze:
@@ -230,18 +217,22 @@ with col_btn_refresh:
     if st.button("🔄 重整", use_container_width=True):
         st.rerun()
 
-# 進行名稱解析！把使用者輸入的轉回純代碼與真實名稱
+# 判斷是否觸發搜尋 (點擊了搜尋按鈕，或是點擊了快捷鍵)
+execute_search = search_btn or st.session_state.trigger_analysis
+
+# 解析目標股票
 target_ticker, target_name = resolve_stock(raw_input, stock_dict)
 
-# 當輸入新標的時，更新搜尋歷史紀錄 (維持最多 5 個)
-if raw_input and target_ticker not in st.session_state.history and target_ticker.isdigit():
-    st.session_state.history.insert(0, target_ticker)
-    if len(st.session_state.history) > 5:
-        st.session_state.history.pop()
+# 更新歷史紀錄 (只在確實按下搜尋或快捷鍵時更新)
+if execute_search and target_ticker:
+    if target_ticker not in st.session_state.history and target_ticker.isdigit():
+        st.session_state.history.insert(0, target_ticker)
+        if len(st.session_state.history) > 5:
+            st.session_state.history.pop()
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# 抓取個股與殖利率資料
+# 抓取個股與殖利率
 stock_data = fetch_current_price(f"{target_ticker}.TW")
 if not stock_data or stock_data['price'] == 0:
     stock_data = fetch_current_price(f"{target_ticker}.TWO")
@@ -251,11 +242,9 @@ if stock_data and stock_data['price'] > 0:
     ttm_div, div_yield = fetch_dividend_yield(f"{target_ticker}.TW", stock_data['price'])
 
 # ==========================================
-# 6. 【首頁關注】網格顯示 (加入中英文合併顯示)
+# 6. 【首頁關注】網格顯示
 # ==========================================
 st.markdown("#### 🎯 首頁關注")
-
-# 這裡把名稱與代碼合併顯示，例如：富邦台50 (006208)
 display_title = f"{target_name} ({target_ticker})"
 
 if stock_data and stock_data['price'] > 0:
@@ -268,6 +257,7 @@ if div_yield > 0:
 else:
     card_yield = create_html_card("估算年化殖利率", "無配息", neutral_text="-")
 
+# 輸出 HTML (使用單行字串，避免 Markdown 解析錯誤)
 st.markdown(f'<div class="grid-2">{card_stock}{card_yield}</div>', unsafe_allow_html=True)
 
 # ==========================================
@@ -284,9 +274,11 @@ st.markdown(f'<div class="grid-4">{cards_html}</div>', unsafe_allow_html=True)
 st.divider()
 
 # ==========================================
-# 8. 主體分析模塊 (點擊按鈕後觸發)
+# 8. 主體分析模塊
 # ==========================================
-if search_btn:
+if execute_search:
+    st.session_state.trigger_analysis = False # 執行完畢後重置狀態
+    
     if not target_ticker:
         st.warning("⚠️ 請輸入股票代碼或名稱！")
     else:
