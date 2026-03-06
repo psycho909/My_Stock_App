@@ -175,3 +175,52 @@ if search_btn:
                         <div class="signal-box box-warn">
                             <div class="signal-title">⚠️ 誘多風險 (高檔黃金交叉)</div>
                             <div class="signal-desc">雖然發生黃金交叉，但位階已在高檔，上漲空間有限，容易形成假突破。</div>
+                            <div class="signal-advice">
+                                <b>💡 實戰建議：</b> 高手可做極短線當沖或隔日沖，但不建議長線資金在此追高買進。
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    else:
+                        st.markdown("""
+                        <div class="signal-box box-buy">
+                            <div class="signal-title">⚡ 穩健進場訊號 (黃金交叉)</div>
+                            <div class="signal-desc">趨勢確立轉強，動能偏多。</div>
+                            <div class="signal-advice">
+                                <b>💡 實戰建議：</b> 可投入 <b>20%</b> 資金順勢操作。
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+                elif current_K < current_D and prev_K >= prev_D:
+                    st.markdown("""
+                    <div class="signal-box box-sell">
+                        <div class="signal-title">📉 警訊：死亡交叉</div>
+                        <div class="signal-desc">K 值由上往下掼破 D 值，短期動能轉弱，可能面臨波段回檔。</div>
+                        <div class="signal-advice">
+                            <b>💡 實戰建議：</b> 暫停買進計畫，保守應對。若跌破重要均線，應果斷執行停損或減碼。
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                # --- 繪製走勢圖 ---
+                st.markdown("### 📈 近半年週 KD 走勢圖")
+                chart_data = df[['K', 'D']].tail(26)
+                st.line_chart(chart_data)
+
+# ==========================================
+# 4. 嵌入前端互動區塊 (JS/HTML)
+# ==========================================
+st.divider()
+components.html(
+    """
+    <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; border: 1px dashed #ced4da; text-align: center;">
+        <h4 style="color: #495057; margin-top: 0;">👨‍💻 前端互動區 (JavaScript)</h4>
+        <button onclick="document.getElementById('js-msg').innerText='✅ 成功連接！您可以在此加入自訂的圖表套件（如 TradingView 輕量圖表）！'" 
+            style="background: #007bff; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-size: 15px;">
+            測試互動腳本
+        </button>
+        <p id="js-msg" style="margin-top: 15px; font-weight: bold; color: #28a745;"></p>
+    </div>
+    """,
+    height=150
+)
