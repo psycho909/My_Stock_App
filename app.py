@@ -7,7 +7,7 @@ import numpy as np
 # ==========================================
 # 1. 頁面基本設定與自訂 CSS
 # ==========================================
-st.set_page_config(page_title="台股週 KD 實戰分析儀", page_icon="📊", layout="centered")
+st.set_page_config(page_title="台股實戰分析儀 (技術+籌碼+時事)", page_icon="🦅", layout="wide")
 
 st.markdown("""
     <style>
@@ -17,20 +17,21 @@ st.markdown("""
     .box-buy { background-color: #d4edda; color: #155724; border-left-color: #28a745; }
     .box-sell { background-color: #f8d7da; color: #721c24; border-left-color: #dc3545; }
     .box-warn { background-color: #fff3cd; color: #856404; border-left-color: #ffc107; }
-    .box-neutral { background-color: #e2e3e5; color: #383d41; border-left-color: #6c757d; }
+    .box-blackswan { background-color: #343a40; color: #f8f9fa; border-left-color: #dc3545; }
     .signal-title { font-size: 1.2rem; font-weight: bold; margin-bottom: 10px; }
     .signal-desc { font-size: 1rem; margin-bottom: 10px; }
-    .signal-advice { font-size: 0.95rem; background: rgba(255,255,255,0.6); padding: 10px; border-radius: 5px; margin-top: 10px;}
+    .signal-advice { font-size: 0.95rem; background: rgba(255,255,255,0.8); color:#000; padding: 10px; border-radius: 5px; margin-top: 10px;}
     .price-target { font-size: 1.1rem; color: #e74c3c; font-weight: bold; }
+    .news-item { border-bottom: 1px solid #ddd; padding: 10px 0; }
+    .news-title { font-weight: bold; color: #0056b3; text-decoration: none; }
     </style>
-    <h1 class="main-title">📊 台股「週 KD」實戰策略分析儀</h1>
+    <h1 class="main-title">🦅 台股終極決策系統 (技術分析 + 時事恐慌偵測)</h1>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. 技術指標計算 (KD + 長天期均線)
+# 2. 核心資料抓取與運算邏輯
 # ==========================================
 def calculate_indicators(df, period=9):
-    # 計算 KD 值
     df['9W_High'] = df['High'].rolling(window=period).max()
     df['9W_Low'] = df['Low'].rolling(window=period).min()
     df['RSV'] = 100 * ((df['Close'] - df['9W_Low']) / (df['9W_High'] - df['9W_Low']))
@@ -46,11 +47,9 @@ def calculate_indicators(df, period=9):
     df['K'] = K_list[1:]
     df['D'] = D_list[1:]
     
-    # 計算週均線 (13週約為季線, 26週約為半年線, 52週約為年線)
     df['13W_MA'] = df['Close'].rolling(window=13).mean()
     df['26W_MA'] = df['Close'].rolling(window=26).mean()
     df['52W_MA'] = df['Close'].rolling(window=52).mean()
-    
     return df
 
 def fetch_stock_data(stock_id):
@@ -59,19 +58,32 @@ def fetch_stock_data(stock_id):
     if df.empty:
         ticker = f"{stock_id}.TWO"
         df = yf.Ticker(ticker).history(period="2y", interval="1wk")
-    return df
+    return df, ticker
+
+def fetch_vix():
+    """抓取 S&P 500 VIX 恐慌指數"""
+    vix_df = yf.Ticker("^VIX").history(period="5d")
+    return vix_df['Close'].iloc[-1] if not vix_df.empty else 20.0
+
+def fetch_news(ticker_symbol):
+    """抓取該檔股票或大盤的即時新聞"""
+    try:
+        news = yf.Ticker(ticker_symbol).news
+        return news[:5] # 只取最新的 5 則
+    except:
+        return []
 
 # ==========================================
-# 3. 使用者介面與核心診斷邏輯
+# 3. 系統介面與分析邏輯
 # ==========================================
-st.markdown("輸入台股代碼，系統將結合 **KD位階** 與 **長線均線**，為您算出最適合大資金分批進場的「具體建議價格」。")
+st.markdown("結合 **全球恐慌指數 (VIX)**、**即時新聞** 與 **週 KD 均線**，為大資金佈局找出最安全的危機入市點。")
 
-col1, col2 = st.columns([3, 1])
+col1, col2 = st.columns([4, 1])
 with col1:
     stock_id = st.text_input("請輸入台股代碼 (如: 006208, 00878)：", value="006208")
 with col2:
     st.markdown("<br>", unsafe_allow_html=True) 
-    search_btn = st.button("🔍 執行分析", use_container_width=True, type="primary")
+    search_btn = st.button("🚀 啟動全方位分析", use_container_width=True, type="primary")
 
 st.divider()
 
@@ -79,110 +91,106 @@ if search_btn:
     if not stock_id:
         st.warning("⚠️ 請輸入股票代碼！")
     else:
-        with st.spinner("正在解析籌碼與技術指標，請稍候..."):
-            df = fetch_stock_data(stock_id)
+        with st.spinner("正在掃描全球總經數據與台股籌碼，請稍候..."):
+            df, exact_ticker = fetch_stock_data(stock_id)
+            vix_value = fetch_vix()
+            news_data = fetch_news(exact_ticker)
             
             if df.empty:
                 st.error("❌ 找不到該檔股票，請確認代碼是否正確。")
             else:
                 df = calculate_indicators(df)
-                
-                # 取得最新數據
                 current_K = df['K'].iloc[-1]
                 current_D = df['D'].iloc[-1]
-                prev_K = df['K'].iloc[-2]
-                prev_D = df['D'].iloc[-2]
                 current_price = df['Close'].iloc[-1]
-                
-                # 取得最新的均線價格 (若資料不足則回傳 0)
                 ma_13 = df['13W_MA'].iloc[-1] if not pd.isna(df['13W_MA'].iloc[-1]) else 0
                 ma_26 = df['26W_MA'].iloc[-1] if not pd.isna(df['26W_MA'].iloc[-1]) else 0
                 ma_52 = df['52W_MA'].iloc[-1] if not pd.isna(df['52W_MA'].iloc[-1]) else 0
-                
                 last_date = df.index[-1].strftime("%Y-%m-%d")
 
-                st.subheader(f"🎯 【{stock_id}】 數據更新至：{last_date}")
-                col_k, col_d, col_p = st.columns(3)
-                col_k.metric("本週 K 值", f"{current_K:.2f}")
-                col_d.metric("本週 D 值", f"{current_D:.2f}")
-                col_p.metric("最新收盤價", f"{current_price:.2f} 元")
-                
                 # ========================================
-                # 模塊一：具體進場價格建議 (均線防守法)
+                # 版面分割：左邊技術面，右邊消息面
                 # ========================================
-                st.markdown("### 💰 具體進場價格與資金配置建議")
-                
-                if current_price > ma_13:
-                    st.markdown(f"""
-                    <div class="signal-box box-neutral">
-                        <div class="signal-title">📈 目前趨勢：多頭強勢 (股價高於季線)</div>
-                        <div class="signal-desc">目前股價偏高，不建議在此重倉追高。請耐心等待股價回檔至下方支撐位：</div>
-                        <div class="signal-advice">
-                            🎯 <b>建議進場點 1 (季線支撐)：約 <span class="price-target">{ma_13:.2f} 元</span></b><br>
-                            - 操作：若股價跌至此價位，可投入 <b>20% (約 200 萬)</b> 試單建倉。<br>
-                            🎯 <b>建議進場點 2 (半年線防禦)：約 <span class="price-target">{ma_26:.2f} 元</span></b><br>
-                            - 操作：若遇到較大回檔跌至此，可再加碼 <b>30% (約 300 萬)</b>。
-                        </div>
-                    </div>
-                    """, unsafe_allow_html=True)
-                elif ma_13 >= current_price > ma_26:
-                    st.markdown(f"""
-                    <div class="signal-box box-buy">
-                        <div class="signal-title">🟢 目前趨勢：回檔買點浮現 (測試季線中)</div>
-                        <div class="signal-desc">股價已回檔至 13 週均線附近，初步的投資價值已經浮現。</div>
-                        <div class="signal-advice">
-                            🎯 <b>現在可買入價位：<span class="price-target">{current_price:.2f} 元</span> 附近</b><br>
-                            - 操作：建議可在此投入 <b>20%~30%</b> 資金建立基本部位。<br>
-                            🎯 <b>下一個加碼防線 (半年線)：約 <span class="price-target">{ma_26:.2f} 元</span></b><br>
-                            - 操作：若跌破現價繼續往下，請耐心等候此價位再做第二次加碼。
-                        </div>
-                    </div>
-                    """, unsafe_allow_html=True)
-                else:
-                    st.markdown(f"""
-                    <div class="signal-box box-buy" style="border-left-color: #28a745; background-color: #d1e7dd;">
-                        <div class="signal-title">💎 目前趨勢：超跌鑽石區 (跌破半年線/年線)</div>
-                        <div class="signal-desc">市場恐慌導致股價跌破中長線支撐，對於 ETF 存股族來說是絕佳的撿便宜時機！</div>
-                        <div class="signal-advice">
-                            🎯 <b>現在強烈建議買入區間：<span class="price-target">{current_price:.2f} 元</span> 附近</b><br>
-                            - 操作：這裡已是非常安全的長線底部區，建議可將 <b>50% 以上</b> 的資金分批用力買進！<br>
-                            🎯 <b>終極年線防線：約 <span class="price-target">{ma_52:.2f} 元</span></b> (若跌破此線更是閉眼買點)
-                        </div>
-                    </div>
-                    """, unsafe_allow_html=True)
+                left_col, right_col = st.columns([2, 1])
 
-                # ========================================
-                # 模塊二：技術面訊號診斷 (KD 狀態)
-                # ========================================
-                st.markdown("### 📋 動能訊號診斷 (KD 輔助)")
-                
-                # 超買/超賣
-                if current_K < 20 or current_D < 20:
-                    st.success("🟢 **位階狀態：超賣區 (恐慌低點)**。目前大家都在殺低，這與上方的「買入建議價格」若相符，勝率極高！")
-                elif current_K > 80 or current_D > 80:
-                    st.error("🔴 **位階狀態：超買區 (過熱高點)**。即使股價看似還有高點，也請嚴格控管資金，隨時準備迎接回檔。")
-                else:
-                    st.info("🔵 **位階狀態：中性區間**。動能平穩，依據上方建議的「均線價格」來掛單即可。")
+                with right_col:
+                    st.markdown("### 🌍 總體經濟與市場情緒")
+                    # 判斷 VIX 恐慌程度
+                    if vix_value >= 30:
+                        st.error(f"🚨 恐慌指數 (VIX): {vix_value:.2f} (極度恐慌)")
+                        st.markdown("**系統判定：黑天鵝事件/系統性風險！市場正處於非理性拋售。**")
+                    elif vix_value >= 20:
+                        st.warning(f"⚠️ 恐慌指數 (VIX): {vix_value:.2f} (市場警戒)")
+                        st.markdown("**系統判定：市場波動加劇，投資人情緒緊張，隨時可能回檔。**")
+                    else:
+                        st.success(f"✅ 恐慌指數 (VIX): {vix_value:.2f} (情緒穩定)")
+                        st.markdown("**系統判定：全球總經環境相對穩定，依技術面操作即可。**")
                     
-                # 交叉訊號
-                if current_K > current_D and prev_K <= prev_D:
-                    st.warning("⚡ **動能變化：剛發生「黃金交叉」！** 多頭重新奪回主導權，若目前價格接近建議買點，請毫不猶豫扣板機。")
-                elif current_K < current_D and prev_K >= prev_D:
-                    st.warning("⚠️ **動能變化：剛發生「死亡交叉」！** 短期可能持續下探，請耐心等待股價跌到下一個「建議進場點」再接刀。")
+                    st.markdown("### 📰 最新時事頭條")
+                    if news_data:
+                        for item in news_data:
+                            title = item.get('title', '無標題')
+                            link = item.get('link', '#')
+                            publisher = item.get('publisher', '未知來源')
+                            st.markdown(f"""
+                            <div class="news-item">
+                                <a href="{link}" target="_blank" class="news-title">{title}</a>
+                                <br><small style="color: #6c757d;">來源: {publisher}</small>
+                            </div>
+                            """, unsafe_allow_html=True)
+                    else:
+                        st.info("目前無最新相關新聞。")
 
-                # --- 繪製走勢圖 ---
-                st.markdown("### 📈 近一年股價與均線走勢圖")
-                chart_data = df[['Close', '13W_MA', '26W_MA']].tail(52)
-                st.line_chart(chart_data)
+                with left_col:
+                    st.markdown(f"### 🎯 【{stock_id}】 數據更新至：{last_date}")
+                    m1, m2, m3 = st.columns(3)
+                    m1.metric("最新收盤價", f"{current_price:.2f} 元")
+                    m2.metric("本週 K 值", f"{current_K:.2f}")
+                    m3.metric("本週 D 值", f"{current_D:.2f}")
+                    
+                    st.markdown("### 💰 系統實戰策略建議")
+                    
+                    # 終極判斷邏輯：如果發生戰爭/黑天鵝 (VIX >= 30) 且股價下跌
+                    if vix_value >= 30 and current_price <= ma_13:
+                        st.markdown(f"""
+                        <div class="signal-box box-blackswan">
+                            <div class="signal-title">🚨 危機入市模式啟動 (黑天鵝/突發利空)</div>
+                            <div class="signal-desc">全球發生重大系統性風險(如戰爭、金融風暴)。對於 ETF 大資金部位來說，這是十年難得一見的財富重分配機會！</div>
+                            <div class="signal-advice">
+                                🎯 <b>【大資金金字塔建倉法】</b><br>
+                                1. <b>確認新聞：</b> 右側新聞若為非經濟因素(如政治、戰爭)，勇敢接刀。<br>
+                                2. <b>第一批 (恐慌殺盤)：<span class="price-target">{current_price:.2f} 元</span></b> ➡️ 投入 <b>20%</b> 資金。<br>
+                                3. <b>第二批 (跌至半年線)：約 <span class="price-target">{ma_26:.2f} 元</span></b> ➡️ 投入 <b>30%</b> 資金。<br>
+                                4. <b>第三批 (跌至年線)：約 <span class="price-target">{ma_52:.2f} 元</span></b> ➡️ 投入 <b>50%</b> 資金 (重壓區)。
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    # 正常技術面判斷
+                    elif current_price > ma_13:
+                        st.markdown(f"""
+                        <div class="signal-box box-warn">
+                            <div class="signal-title">📈 多頭強勢區 (請忍住不買)</div>
+                            <div class="signal-desc">目前股價偏高，且市場沒有恐慌跡象，不適合大資金單筆進場。</div>
+                            <div class="signal-advice">
+                                🎯 <b>耐心等待季線回檔：約 <span class="price-target">{ma_13:.2f} 元</span></b><br>
+                                - 建議將資金保留，或僅用極小資金(5%)定期定額買進。
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    else:
+                        st.markdown(f"""
+                        <div class="signal-box box-buy">
+                            <div class="signal-title">🟢 常態回檔買點 (測試長線支撐)</div>
+                            <div class="signal-desc">股價已修正至合理的長天期均線附近。</div>
+                            <div class="signal-advice">
+                                🎯 <b>目前的建議進場價：<span class="price-target">{current_price:.2f} 元</span></b><br>
+                                - 操作：若 KD 也同步進入 20 以下(超賣區)，可投入 <b>30%</b> 資金佈局。<br>
+                                🎯 <b>下方防守線 (半年線/年線)：<span class="price-target">{ma_26:.2f} ~ {ma_52:.2f} 元</span></b>
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
 
-# ==========================================
-# 4. 嵌入前端互動區塊 (JS/HTML)
-# ==========================================
-st.divider()
-components.html(
-    """
-    <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px; text-align: center;">
-        <p style="color: #6c757d; font-size: 14px; margin: 0;">💡 投資理財有賺有賠，本系統提供之建議價格係基於歷史均線回測，請搭配自身資金水位分批操作。</p>
-    </div>
-    """, height=60
-)
+                    # 走勢圖
+                    st.markdown("### 📈 近一年走勢與防守均線")
+                    chart_data = df[['Close', '13W_MA', '26W_MA', '52W_MA']].tail(52)
+                    st.line_chart(chart_data)
